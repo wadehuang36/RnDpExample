@@ -3,6 +3,7 @@
 #import <React/RCTBridge.h>
 #import <React/RCTBundleURLProvider.h>
 #import <React/RCTRootView.h>
+#import <React/RCTLinkingManager.h>
 
 #ifdef FB_SONARKIT_ENABLED
 #import <FlipperKit/FlipperClient.h>
@@ -31,6 +32,35 @@ static void InitializeFlipper(UIApplication *application) {
   InitializeFlipper(application);
 #endif
 
+  // init notification
+  if ([UNUserNotificationCenter class] != nil) {
+    [UNUserNotificationCenter currentNotificationCenter].delegate = self;
+    UNAuthorizationOptions authOptions = UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge;
+    [[UNUserNotificationCenter currentNotificationCenter] requestAuthorizationWithOptions:authOptions completionHandler:^(BOOL granted, NSError * _Nullable error) {
+        
+      if (granted) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [application registerForRemoteNotifications];
+        });
+      }
+      
+      if (error != nil) {
+        NSLog( @"Notiication initialize failed, %@ - %@", error.localizedFailureReason, error.localizedDescription );
+      }
+    }];
+  };
+
+  // read notification data, if the message has a link
+  // put the link to UIApplicationLaunchOptionsURLKey in launchOptions
+  NSDictionary* notification = [launchOptions valueForKey:UIApplicationLaunchOptionsRemoteNotificationKey];
+  if (notification != nil) {
+    NSString* link = [notification valueForKeyPath:@"aps.link"];
+    
+    if (link != nil) {
+      [launchOptions setValue:link forKey:UIApplicationLaunchOptionsURLKey];
+    }
+  }
+
   RCTBridge *bridge = [[RCTBridge alloc] initWithDelegate:self launchOptions:launchOptions];
   RCTRootView *rootView = [[RCTRootView alloc] initWithBridge:bridge
                                                    moduleName:@"RnDpExample"
@@ -53,6 +83,48 @@ static void InitializeFlipper(UIApplication *application) {
 #else
   return [[NSBundle mainBundle] URLForResource:@"main" withExtension:@"jsbundle"];
 #endif
+}
+
+// for deep link
+- (BOOL)application:(UIApplication *)application
+   openURL:(NSURL *)url
+   options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options
+{
+  return [RCTLinkingManager application:application openURL:url options:options];
+}
+
+// print token for debug purpose
+- (void)application:(UIApplication *) application didRegisterForRemoteNotificationsWithDeviceToken:(nonnull NSData *)deviceToken {
+  const char *data = [deviceToken bytes];
+  NSMutableString *token = [NSMutableString string];
+
+  for (NSUInteger i = 0; i < [deviceToken length]; i++) {
+      [token appendFormat:@"%02.2hhX", data[i]];
+  }
+
+  NSLog(@"APN Token: %@", [token copy]);
+}
+
+// recieve notification when app is in frontground
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+         willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions options))completionHandler {
+  completionHandler(UNNotificationPresentationOptionAlert + UNNotificationPresentationOptionSound + UNNotificationPresentationOptionBadge);
+}
+
+// handle tapping notifications and trigger the event
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+        didReceiveNotificationResponse:(UNNotificationResponse *)response
+         withCompletionHandler:(void(^)(void))completionHandler  {  
+  NSDictionary *userInfo = response.notification.request.content.userInfo;
+
+  NSString *link = [userInfo valueForKeyPath:@"aps.link"];
+
+  if (link != nil) {
+    [RCTLinkingManager application:UIApplication.sharedApplication openURL:[NSURL URLWithString:link] options: [NSDictionary alloc]];
+  }
+
+  completionHandler();
 }
 
 @end
